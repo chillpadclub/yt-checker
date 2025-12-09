@@ -1,0 +1,35 @@
+version: '3.8'
+
+services:
+  youtube-monitor:
+    build: .
+    container_name: youtube-monitor
+    restart: unless-stopped
+    
+    environment:
+      - MODE=${MODE:-daemon}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - WEBHOOK_URL=${WEBHOOK_URL}
+    
+    ports:
+      - "${METRICS_PORT:-9090}:9090"
+    
+    volumes:
+      - ./logs:/app/logs
+      - ./config.json:/app/config.json:ro
+    
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+    
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9090/health"]
+      interval: 5m
+      timeout: 30s
+      retries: 3
+      start_period: 10s
