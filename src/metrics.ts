@@ -4,13 +4,27 @@ import type { Logger } from "./logger.ts";
 export class MetricsServer {
   private server?: Deno.HttpServer;
   private abortController?: AbortController;
+  private authEnabled: boolean;
+  private authUsername?: string;
+  private authPassword?: string;
 
   constructor(
     private port: number,
     private path: string,
     private state: any,
     private logger: Logger,
-  ) {}
+  ) {
+    // Читаем Basic Auth credentials из env
+    this.authUsername = Deno.env.get("METRICS_USERNAME");
+    this.authPassword = Deno.env.get("METRICS_PASSWORD");
+    this.authEnabled = !!(this.authUsername && this.authPassword);
+
+    if (this.authEnabled) {
+      this.logger.info("Metrics Basic Auth enabled", {
+        username: this.authUsername,
+      });
+    }
+  }
 
   async start(): Promise<void> {
     this.abortController = new AbortController();
@@ -18,6 +32,7 @@ export class MetricsServer {
     const handler = (req: Request): Response => {
       const url = new URL(req.url);
 
+      // Health endpoint - без авторизации
       if (url.pathname === "/health") {
         return new Response(
           JSON.stringify({ status: "healthy", timestamp: new Date().toISOString() }),
@@ -26,6 +41,34 @@ export class MetricsServer {
             headers: { "Content-Type": "application/json" },
           }
         );
+      }
+
+      // Проверяем Basic Auth для /metrics
+      if (this.authEnabled && (url.pathname === this.path || url.pathname === this.path + "/json")) {
+        const authHeader = req.headers.get("Authorization");
+
+        if (!authHeader || !authHeader.startsWith("Basic ")) {
+          return new Response("Unauthorized", {
+            status: 401,
+            headers: {
+              "WWW-Authenticate": 'Basic realm="Metrics"',
+            },
+          });
+        }
+
+        // Декодируем Basic Auth
+        const base64Credentials = authHeader.substring(6);
+        const credentials = atob(base64Credentials);
+        const [username, password] = credentials.split(":");
+
+        if (username !== this.authUsername || password !== this.authPassword) {
+          return new Response("Unauthorized", {
+            status: 401,
+            headers: {
+              "WWW-Authenticate": 'Basic realm="Metrics"',
+            },
+          });
+        }
       }
 
       if (url.pathname === this.path) {
