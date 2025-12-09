@@ -1,4 +1,10 @@
-import type { Config, AlertPayload } from "./types.ts";
+import type {
+  Config,
+  AlertPayload,
+  SimplifiedWebhookPayload,
+  NodeSummary,
+  CheckResult,
+} from "./types.ts";
 import type { Logger } from "./logger.ts";
 
 export class AlertManager {
@@ -29,8 +35,11 @@ export class AlertManager {
       endpoints: endpoints.length,
     });
 
+    // Create simplified payload
+    const simplifiedPayload = this.createSimplifiedPayload(payload);
+
     const promises = endpoints.map(endpoint =>
-      this.sendToEndpoint(endpoint.url, endpoint.headers || {}, payload)
+      this.sendToEndpoint(endpoint.url, endpoint.headers || {}, simplifiedPayload)
     );
 
     const results = await Promise.allSettled(promises);
@@ -40,7 +49,7 @@ export class AlertManager {
 
     results.forEach((result, index) => {
       const endpoint = endpoints[index];
-      
+
       if (result.status === "fulfilled") {
         successCount++;
         this.logger.debug(`Alert sent successfully to ${endpoint.name}`);
@@ -58,10 +67,70 @@ export class AlertManager {
     });
   }
 
+  private createSimplifiedPayload(payload: AlertPayload): SimplifiedWebhookPayload {
+    // Group results by node
+    const nodeGroups = new Map<string, CheckResult[]>();
+
+    for (const result of payload.status.details) {
+      const nodeLabel = result.node_label || "direct";
+      if (!nodeGroups.has(nodeLabel)) {
+        nodeGroups.set(nodeLabel, []);
+      }
+      nodeGroups.get(nodeLabel)!.push(result);
+    }
+
+    // Create node summaries (only for failing nodes)
+    const failingNodes: NodeSummary[] = [];
+
+    for (const [nodeLabel, results] of nodeGroups.entries()) {
+      const failedCount = results.filter(r => !r.success).length;
+      const totalCount = results.length;
+
+      // Only include nodes with failures
+      if (failedCount > 0) {
+        // Get unique error messages
+        const errorSet = new Set<string>();
+        for (const result of results) {
+          if (result.error) {
+            errorSet.add(result.error);
+          }
+        }
+
+        failingNodes.push({
+          node: nodeLabel,
+          failed: failedCount,
+          total: totalCount,
+          status: "failed",
+          errors: Array.from(errorSet),
+        });
+      }
+    }
+
+    // Calculate totals
+    const totalNodesChecked = nodeGroups.size;
+    const totalNodesFailed = failingNodes.length;
+    const totalVideosChecked = payload.status.details.length;
+    const totalVideosFailed = payload.status.failed_videos;
+
+    return {
+      event: payload.event,
+      severity: payload.severity,
+      timestamp: payload.timestamp,
+      message: payload.message,
+      failing_nodes: failingNodes,
+      summary: {
+        total_nodes_checked: totalNodesChecked,
+        total_nodes_failed: totalNodesFailed,
+        total_videos_failed: totalVideosFailed,
+        total_videos_checked: totalVideosChecked,
+      },
+    };
+  }
+
   private async sendToEndpoint(
     url: string,
     headers: Record<string, string>,
-    payload: AlertPayload,
+    payload: SimplifiedWebhookPayload,
   ): Promise<void> {
     try {
       const response = await fetch(url, {
@@ -83,9 +152,10 @@ export class AlertManager {
         url,
       });
     } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
       this.logger.error("Webhook request failed", {
         url,
-        error: error.message,
+        error: errorMessage,
       });
       throw error;
     }

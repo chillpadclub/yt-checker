@@ -69,6 +69,14 @@ export interface CheckResult {
 }
 
 // Alert types
+export interface NodeSummary {
+  node: string;          // Node label (e.g., "Amsterdam", "Moscow")
+  failed: number;        // Number of failed videos
+  total: number;         // Total videos checked
+  status: "ok" | "failed";
+  errors?: string[];     // Unique error messages (optional)
+}
+
 export interface AlertPayload {
   event: "error" | "recovery" | "warning" | "degradation";
   severity: "critical" | "warning" | "info";
@@ -90,6 +98,21 @@ export interface AlertPayload {
     last_success: string | null;
     proxy_enabled?: boolean;
     proxy_status?: string;
+  };
+}
+
+// Simplified webhook payload (only failing nodes)
+export interface SimplifiedWebhookPayload {
+  event: "error" | "recovery" | "warning" | "degradation";
+  severity: "critical" | "warning" | "info";
+  timestamp: string;
+  message: string;
+  failing_nodes: NodeSummary[];  // Only nodes with failures
+  summary: {
+    total_nodes_checked: number;
+    total_nodes_failed: number;
+    total_videos_failed: number;
+    total_videos_checked: number;
   };
 }
 
