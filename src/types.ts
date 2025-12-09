@@ -36,6 +36,12 @@ export interface ProxyConfig {
   url?: string;
 }
 
+export interface SubscriptionConfig {
+  enabled: boolean;
+  url: string;
+  refresh_interval_hours: number;
+}
+
 export interface Config {
   videos: VideoConfig[];
   check_interval_seconds: number;
@@ -48,10 +54,12 @@ export interface Config {
   metrics?: MetricsConfig;
   logging: LoggingConfig;
   proxy?: ProxyConfig;
+  subscription?: SubscriptionConfig;
 }
 
 // Check result types
 export interface CheckResult {
+  node_label?: string;
   video_id: string;
   status: "ok" | "failed";
   success: boolean;
@@ -66,6 +74,7 @@ export interface AlertPayload {
   severity: "critical" | "warning" | "info";
   timestamp: string;
   node: {
+    label?: string;
     hostname: string;
     ip: string;
   };
@@ -79,6 +88,8 @@ export interface AlertPayload {
   metadata: {
     consecutive_failures: number;
     last_success: string | null;
+    proxy_enabled?: boolean;
+    proxy_status?: string;
   };
 }
 

@@ -29,19 +29,19 @@ export class MetricsServer {
       }
 
       if (url.pathname === this.path) {
-        const format = url.searchParams.get("format");
+        // Prometheus format by default
+        return new Response(this.getPrometheusMetrics(), {
+          status: 200,
+          headers: { "Content-Type": "text/plain; version=0.0.4" },
+        });
+      }
 
-        if (format === "prometheus") {
-          return new Response(this.getPrometheusMetrics(), {
-            status: 200,
-            headers: { "Content-Type": "text/plain; version=0.0.4" },
-          });
-        } else {
-          return new Response(JSON.stringify(this.getMetrics(), null, 2), {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          });
-        }
+      // Optional JSON endpoint
+      if (url.pathname === this.path + "/json") {
+        return new Response(JSON.stringify(this.getMetrics(), null, 2), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
       }
 
       return new Response("Not Found", { status: 404 });
@@ -142,17 +142,19 @@ export class MetricsServer {
 
     lines.push("# HELP youtube_check_success Whether the video check succeeded (1 = yes, 0 = no)");
     lines.push("# TYPE youtube_check_success gauge");
-    for (const video of metrics.videos) {
-      const value = video.status === "ok" ? 1 : 0;
-      lines.push(`youtube_check_success{video_id="${video.id}"} ${value}`);
+    for (const result of this.state.lastCheckResults) {
+      const node = result.node_label || "direct";
+      const value = result.success ? 1 : 0;
+      lines.push(`youtube_check_success{node="${node}",video_id="${result.video_id}"} ${value}`);
     }
     lines.push("");
 
     lines.push("# HELP youtube_check_duration_seconds Duration of video check");
     lines.push("# TYPE youtube_check_duration_seconds gauge");
-    for (const video of metrics.videos) {
-      const seconds = (video.last_check_duration_ms / 1000).toFixed(3);
-      lines.push(`youtube_check_duration_seconds{video_id="${video.id}"} ${seconds}`);
+    for (const result of this.state.lastCheckResults) {
+      const node = result.node_label || "direct";
+      const seconds = (result.duration_ms / 1000).toFixed(3);
+      lines.push(`youtube_check_duration_seconds{node="${node}",video_id="${result.video_id}"} ${seconds}`);
     }
     lines.push("");
 

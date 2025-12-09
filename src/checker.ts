@@ -2,12 +2,25 @@ import type { Config, CheckResult } from "./types.ts";
 import type { Logger } from "./logger.ts";
 
 export class VideoChecker {
+  private socksProxy?: string;
+  private nodeLabel?: string;
+
   constructor(
     private config: Config,
     private logger: Logger,
   ) {}
 
+  setSocksProxy(proxy: string) {
+    this.socksProxy = proxy;
+    this.logger.info("SOCKS proxy configured", { proxy });
+  }
+
+  setNodeLabel(label: string) {
+    this.nodeLabel = label;
+  }
+
   async checkAllVideos(): Promise<CheckResult[]> {
+    // Проверяем все видео параллельно
     const promises = this.config.videos.map(video => 
       this.checkVideo(video.id)
     );
@@ -21,17 +34,27 @@ export class VideoChecker {
     try {
       this.logger.debug(`Checking video: ${videoId}`);
       
+      // Формируем команду yt-dlp
+      const args = [
+        "--simulate",
+        "--no-warnings",
+        "--print", "title",
+      ];
+
+      // Добавляем прокси если настроен
+      if (this.socksProxy) {
+        args.push("--proxy", this.socksProxy);
+      }
+
+      args.push(`https://www.youtube.com/watch?v=${videoId}`);
+
       const command = new Deno.Command("yt-dlp", {
-        args: [
-          "--simulate",
-          "--no-warnings",
-          "--print", "title",
-          `https://www.youtube.com/watch?v=${videoId}`,
-        ],
+        args,
         stdout: "piped",
         stderr: "piped",
       });
 
+      // Timeout
       const timeout = setTimeout(() => {
         this.logger.warn(`Check timeout for video: ${videoId}`);
       }, this.config.timeout_seconds * 1000);
@@ -47,9 +70,11 @@ export class VideoChecker {
         this.logger.debug(`Video check successful: ${videoId}`, {
           title,
           duration_ms,
+          proxy: this.socksProxy ? "enabled" : "disabled",
         });
 
         return {
+          node_label: this.nodeLabel,
           video_id: videoId,
           status: "ok",
           success: true,
@@ -63,9 +88,11 @@ export class VideoChecker {
         this.logger.warn(`Video check failed: ${videoId}`, {
           error,
           duration_ms,
+          proxy: this.socksProxy ? "enabled" : "disabled",
         });
 
         return {
+          node_label: this.nodeLabel,
           video_id: videoId,
           status: "failed",
           success: false,
@@ -76,24 +103,28 @@ export class VideoChecker {
       }
     } catch (error) {
       const duration_ms = Date.now() - startTime;
-      
+      const errorMessage = error instanceof Error ? error.message : String(error);
+
       this.logger.error(`Video check exception: ${videoId}`, {
-        error: error.message,
+        error: errorMessage,
         duration_ms,
       });
 
       return {
+        node_label: this.nodeLabel,
         video_id: videoId,
         status: "failed",
         success: false,
         duration_ms,
-        error: error.message,
+        error: errorMessage,
         timestamp: new Date().toISOString(),
       };
     }
   }
 
   private parseError(errorOutput: string): string {
+    // Извлекаем понятное сообщение об ошибке из вывода yt-dlp
+    
     if (errorOutput.includes("HTTP Error 403")) {
       return "HTTP 403: Video unavailable (access denied)";
     }
@@ -117,6 +148,14 @@ export class VideoChecker {
     if (errorOutput.includes("timeout")) {
       return "Connection timeout";
     }
+
+    if (errorOutput.includes("Unable to connect")) {
+      return "Proxy connection failed";
+    }
+
+    if (errorOutput.includes("SOCKS")) {
+      return "SOCKS proxy error";
+    }
     
     if (errorOutput.includes("Unable to extract")) {
       return "Unable to extract video data";
@@ -126,6 +165,7 @@ export class VideoChecker {
       return "Age-restricted video";
     }
     
+    // Если не можем распарсить, возвращаем первую строку ошибки
     const firstLine = errorOutput.split("\n").find(line => 
       line.includes("ERROR") || line.includes("WARNING")
     );

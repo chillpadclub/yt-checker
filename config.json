@@ -45,8 +45,14 @@
     "console": true,
     "file": true
   },
-  
+
   "proxy": {
     "type": "system"
+  },
+
+  "subscription": {
+    "enabled": true,
+    "url": "${SUBSCRIPTION_URL}",
+    "refresh_interval_hours": 24
   }
 }

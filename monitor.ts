@@ -1,13 +1,15 @@
-#!/usr/bin/env -S deno run --allow-net --allow-read --allow-write=./logs --allow-env --allow-run=yt-dlp
+#!/usr/bin/env -S deno run --allow-net --allow-read --allow-write=./logs,/etc/xray --allow-env --allow-run=yt-dlp,xray
 
 import { parse } from "https://deno.land/std@0.208.0/flags/mod.ts";
 import { VideoChecker } from "./src/checker.ts";
 import { AlertManager } from "./src/alerting.ts";
 import { MetricsServer } from "./src/metrics.ts";
 import { Logger } from "./src/logger.ts";
+import { XrayManager } from "./src/xray.ts";
+import { SubscriptionManager, type NodeInfo } from "./src/subscription.ts";
 import type { Config, CheckResult } from "./src/types.ts";
 
-const VERSION = "1.0.0";
+const VERSION = "2.0.0";
 
 // Загрузка конфига
 async function loadConfig(): Promise<Config> {
@@ -41,6 +43,8 @@ class MonitorState {
   totalFailures = 0;
   startTime = Date.now();
   lastCheckResults: CheckResult[] = [];
+  proxyEnabled = false;
+  proxyStatus = "unknown";
 }
 
 class YouTubeMonitor {
@@ -49,6 +53,9 @@ class YouTubeMonitor {
   private checker: VideoChecker;
   private alertManager: AlertManager;
   private metricsServer?: MetricsServer;
+  private xrayManager?: XrayManager;
+  private subscriptionManager?: SubscriptionManager;
+  private currentNodes: NodeInfo[] = [];
   private state: MonitorState;
   private checkInterval?: number;
 
@@ -78,6 +85,71 @@ class YouTubeMonitor {
       metricsEnabled: this.config.metrics?.enabled,
     });
 
+    // Инициализируем Xray если указан PROXY_LINK
+    const proxyLink = Deno.env.get("PROXY_LINK");
+    if (proxyLink) {
+      try {
+        this.logger.info("Initializing Xray proxy");
+        this.xrayManager = new XrayManager(proxyLink, this.logger);
+        await this.xrayManager.start();
+        
+        // Настраиваем checker для использования прокси
+        const socksProxy = this.xrayManager.getSocksProxy();
+        this.checker.setSocksProxy(socksProxy);
+        
+        // Тестируем подключение
+        const connected = await this.xrayManager.testConnection();
+        this.state.proxyEnabled = true;
+        this.state.proxyStatus = connected ? "connected" : "disconnected";
+        
+        this.logger.info("Xray proxy initialized", {
+          proxy: socksProxy,
+          status: this.state.proxyStatus,
+        });
+      } catch (error) {
+        this.logger.error("Failed to initialize Xray proxy", {
+          error: error.message,
+        });
+        this.logger.warn("Continuing without proxy...");
+      }
+    } else {
+      this.logger.info("No PROXY_LINK specified, running without proxy");
+    }
+
+    // Инициализируем Subscription если указан SUBSCRIPTION_URL
+    const subscriptionUrl = Deno.env.get("SUBSCRIPTION_URL");
+    if (subscriptionUrl && this.config.subscription?.enabled) {
+      try {
+        this.logger.info("Initializing subscription manager");
+        this.subscriptionManager = new SubscriptionManager(
+          subscriptionUrl,
+          this.config.subscription.refresh_interval_hours,
+          this.logger
+        );
+
+        // Загрузить ноды
+        this.currentNodes = await this.subscriptionManager.fetchAndParse();
+        this.logger.info("Nodes loaded from subscription", {
+          count: this.currentNodes.length,
+          nodes: this.currentNodes.map(n => n.label),
+        });
+
+        // Периодическое обновление
+        this.subscriptionManager.startPeriodicRefresh(async (nodes) => {
+          this.currentNodes = nodes;
+          this.logger.info("Nodes refreshed", { count: nodes.length });
+        });
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        this.logger.error("Failed to initialize subscription", {
+          error: errorMessage,
+        });
+        this.logger.warn("Continuing without subscription...");
+      }
+    } else if (subscriptionUrl) {
+      this.logger.warn("SUBSCRIPTION_URL set but subscription not enabled in config");
+    }
+
     // Стартуем metrics сервер
     if (this.metricsServer) {
       await this.metricsServer.start();
@@ -98,6 +170,12 @@ class YouTubeMonitor {
       if (this.checkInterval) {
         clearInterval(this.checkInterval);
       }
+      if (this.subscriptionManager) {
+        this.subscriptionManager.stop();
+      }
+      if (this.xrayManager) {
+        await this.xrayManager.stop();
+      }
       if (this.metricsServer) {
         await this.metricsServer.stop();
       }
@@ -113,32 +191,91 @@ class YouTubeMonitor {
     this.state.totalChecks++;
 
     try {
-      // Проверяем все видео параллельно
-      const results = await this.checker.checkAllVideos();
-      this.state.lastCheckResults = results;
+      const allResults: CheckResult[] = [];
+
+      // Если есть subscription - проверяем каждую ноду ПОСЛЕДОВАТЕЛЬНО
+      if (this.currentNodes.length > 0) {
+        for (const node of this.currentNodes) {
+          this.logger.info(`Checking node: ${node.label}`);
+
+          let xrayManager: XrayManager | undefined;
+
+          try {
+            // [1] Запустить Xray для этой ноды
+            xrayManager = new XrayManager(node.vlessUrl, this.logger);
+            await xrayManager.start();
+
+            // [2] Настроить checker
+            const socksProxy = xrayManager.getSocksProxy();
+            this.checker.setSocksProxy(socksProxy);
+            this.checker.setNodeLabel(node.label);
+
+            // [3] Проверить видео
+            const results = await this.checker.checkAllVideos();
+            allResults.push(...results);
+
+            this.logger.info(`Node ${node.label} checked`, {
+              total: results.length,
+              failed: results.filter(r => !r.success).length,
+            });
+
+          } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            this.logger.error(`Failed to check node ${node.label}`, {
+              error: errorMessage,
+            });
+
+            // Добавить failed results для всех видео
+            for (const video of this.config.videos) {
+              allResults.push({
+                node_label: node.label,
+                video_id: video.id,
+                status: "failed",
+                success: false,
+                duration_ms: 0,
+                error: `Node check failed: ${errorMessage}`,
+                timestamp: new Date().toISOString(),
+              });
+            }
+          } finally {
+            // [4] Остановить Xray
+            if (xrayManager) {
+              await xrayManager.stop();
+            }
+          }
+        }
+      } else {
+        // Старый режим: один PROXY_LINK или без прокси
+        const results = await this.checker.checkAllVideos();
+        allResults.push(...results);
+      }
+
+      this.state.lastCheckResults = allResults;
 
       // Анализируем результаты
-      const failedCount = results.filter(r => !r.success).length;
-      const totalCount = results.length;
+      const failedCount = allResults.filter(r => !r.success).length;
+      const totalCount = allResults.length;
 
       this.logger.info("Check completed", {
         total: totalCount,
         failed: failedCount,
         success: totalCount - failedCount,
-        duration_ms: Math.max(...results.map(r => r.duration_ms)),
+        nodes: this.currentNodes.length || 1,
+        proxy: this.state.proxyEnabled ? "enabled" : "disabled",
       });
 
       // Обновляем состояние
       if (failedCount >= this.config.alert_threshold) {
-        await this.handleFailure(results, failedCount, totalCount);
+        await this.handleFailure(allResults, failedCount, totalCount);
       } else if (failedCount > 0) {
-        await this.handleDegradation(results, failedCount, totalCount);
+        await this.handleDegradation(allResults, failedCount, totalCount);
       } else {
-        await this.handleSuccess(results);
+        await this.handleSuccess(allResults);
       }
 
     } catch (error) {
-      this.logger.error("Check cycle failed", { error: error.message });
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.logger.error("Check cycle failed", { error: errorMessage });
       this.state.totalFailures++;
     }
   }
@@ -158,6 +295,7 @@ class YouTubeMonitor {
         failed: failedCount,
         total: totalCount,
         consecutiveFailures: this.state.consecutiveFailures,
+        proxyEnabled: this.state.proxyEnabled,
       });
 
       await this.alertManager.sendAlert({
@@ -174,10 +312,12 @@ class YouTubeMonitor {
           total_videos: totalCount,
           details: results,
         },
-        message: `YouTube proxy check FAILED: ${failedCount}/${totalCount} videos unavailable`,
+        message: `YouTube ${this.state.proxyEnabled ? 'proxy' : 'direct'} check FAILED: ${failedCount}/${totalCount} videos unavailable`,
         metadata: {
           consecutive_failures: this.state.consecutiveFailures,
           last_success: this.getLastSuccessTime(),
+          proxy_enabled: this.state.proxyEnabled,
+          proxy_status: this.state.proxyStatus,
         },
       });
 
@@ -193,6 +333,7 @@ class YouTubeMonitor {
       this.logger.warn("YouTube proxy DEGRADED", {
         failed: failedCount,
         total: totalCount,
+        proxyEnabled: this.state.proxyEnabled,
       });
 
       if (this.config.webhooks?.endpoints?.some(e => e.events.includes("warning"))) {
@@ -210,10 +351,12 @@ class YouTubeMonitor {
             total_videos: totalCount,
             details: results,
           },
-          message: `YouTube proxy DEGRADED: ${failedCount}/${totalCount} videos failing`,
+          message: `YouTube ${this.state.proxyEnabled ? 'proxy' : 'direct'} DEGRADED: ${failedCount}/${totalCount} videos failing`,
           metadata: {
             consecutive_failures: this.state.consecutiveFailures,
             last_success: this.getLastSuccessTime(),
+            proxy_enabled: this.state.proxyEnabled,
+            proxy_status: this.state.proxyStatus,
           },
         });
       }
@@ -243,10 +386,12 @@ class YouTubeMonitor {
           total_videos: results.length,
           details: results,
         },
-        message: "YouTube proxy RECOVERED - all checks passing",
+        message: `YouTube ${this.state.proxyEnabled ? 'proxy' : 'direct'} RECOVERED - all checks passing`,
         metadata: {
           consecutive_failures: 0,
           last_success: new Date().toISOString(),
+          proxy_enabled: this.state.proxyEnabled,
+          proxy_status: this.state.proxyStatus,
         },
       });
     }
@@ -267,7 +412,6 @@ class YouTubeMonitor {
 
   private async getLocalIP(): Promise<string> {
     try {
-      // Простой способ получить IP
       const response = await fetch("https://api.ipify.org?format=json", {
         signal: AbortSignal.timeout(5000),
       });
@@ -280,6 +424,24 @@ class YouTubeMonitor {
 
   async runOnce(): Promise<boolean> {
     console.log("Running single check...\n");
+
+    // Инициализируем Xray если указан PROXY_LINK
+    const proxyLink = Deno.env.get("PROXY_LINK");
+    if (proxyLink) {
+      try {
+        console.log("🔄 Initializing Xray proxy...");
+        this.xrayManager = new XrayManager(proxyLink, this.logger);
+        await this.xrayManager.start();
+        
+        const socksProxy = this.xrayManager.getSocksProxy();
+        this.checker.setSocksProxy(socksProxy);
+        
+        console.log(`✅ Xray proxy started: ${socksProxy}\n`);
+      } catch (error) {
+        console.error(`❌ Failed to start Xray: ${error.message}`);
+        console.log("Continuing without proxy...\n");
+      }
+    }
     
     const results = await this.checker.checkAllVideos();
     const failedCount = results.filter(r => !r.success).length;
@@ -306,7 +468,105 @@ class YouTubeMonitor {
     const overallStatus = failedCount >= this.config.alert_threshold ? "FAILED" : "OK";
     console.log(`\nOverall Status: ${overallStatus}`);
     
+    if (proxyLink) {
+      console.log(`Proxy: ${this.xrayManager ? "enabled" : "failed to start"}`);
+    }
+
+    // Cleanup
+    if (this.xrayManager) {
+      await this.xrayManager.stop();
+    }
+    
     return failedCount < this.config.alert_threshold;
+  }
+
+  async testWebhook(): Promise<boolean> {
+    console.log("Testing webhook configuration...\n");
+    
+    if (!this.config.webhooks?.enabled) {
+      console.error("❌ Webhooks are disabled in config");
+      return false;
+    }
+
+    const endpoints = this.config.webhooks.endpoints?.filter(e => e.enabled) || [];
+    
+    if (endpoints.length === 0) {
+      console.error("❌ No webhook endpoints configured");
+      return false;
+    }
+
+    console.log(`Found ${endpoints.length} endpoint(s), sending test alerts...\n`);
+
+    // Создаем тестовый payload
+    const testPayload: any = {
+      event: "warning",
+      severity: "info",
+      timestamp: new Date().toISOString(),
+      node: {
+        hostname: Deno.hostname(),
+        ip: await this.getLocalIP(),
+      },
+      status: {
+        available: true,
+        failed_videos: 0,
+        total_videos: 3,
+        details: [
+          {
+            video_id: "TEST123",
+            status: "ok",
+            success: true,
+            duration_ms: 1234,
+            timestamp: new Date().toISOString(),
+          }
+        ],
+      },
+      message: "🧪 TEST ALERT - YouTube Monitor webhook test",
+      metadata: {
+        consecutive_failures: 0,
+        last_success: new Date().toISOString(),
+        proxy_enabled: false,
+        proxy_status: "n/a",
+      },
+    };
+
+    let allSuccess = true;
+
+    for (const endpoint of endpoints) {
+      console.log(`Sending test alert to: ${endpoint.name}`);
+      console.log(`URL: ${endpoint.url}`);
+      
+      try {
+        const response = await fetch(endpoint.url, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(endpoint.headers || {}),
+          },
+          body: JSON.stringify(testPayload),
+          signal: AbortSignal.timeout(10000),
+        });
+
+        if (response.ok) {
+          console.log(`✅ Success! Status: ${response.status}`);
+          const responseText = await response.text();
+          if (responseText) {
+            console.log(`   Response: ${responseText}\n`);
+          } else {
+            console.log(`   Response: (empty)\n`);
+          }
+        } else {
+          console.error(`❌ Failed! Status: ${response.status}`);
+          console.error(`   Response: ${await response.text()}\n`);
+          allSuccess = false;
+        }
+      } catch (error) {
+        console.error(`❌ Error: ${error.message}\n`);
+        allSuccess = false;
+      }
+    }
+
+    console.log(allSuccess ? "✅ All webhooks working!" : "❌ Some webhooks failed");
+    return allSuccess;
   }
 
   async validate(): Promise<boolean> {
@@ -362,6 +622,43 @@ class YouTubeMonitor {
       valid = false;
     }
 
+    // Проверяем xray
+    try {
+      const xrayCheck = new Deno.Command("xray", {
+        args: ["version"],
+        stdout: "piped",
+        stderr: "piped",
+      });
+      
+      const { code, stdout } = await xrayCheck.output();
+      
+      if (code === 0) {
+        const output = new TextDecoder().decode(stdout);
+        const version = output.split("\n")[0];
+        console.log(`✅ Xray: ${version}`);
+      } else {
+        console.error("❌ Xray not found or not working");
+        valid = false;
+      }
+    } catch {
+      console.error("❌ Xray not found");
+      valid = false;
+    }
+
+    // Проверяем PROXY_LINK
+    const proxyLink = Deno.env.get("PROXY_LINK");
+    if (proxyLink) {
+      console.log(`✅ PROXY_LINK: configured`);
+      try {
+        const url = new URL(proxyLink);
+        console.log(`   Protocol: ${url.protocol.replace(":", "")}`);
+      } catch {
+        console.warn("⚠️  PROXY_LINK format may be invalid");
+      }
+    } else {
+      console.log(`ℹ️  PROXY_LINK: not set (will run without proxy)`);
+    }
+
     console.log(valid ? "\n✅ Configuration is valid" : "\n❌ Configuration has errors");
     return valid;
   }
@@ -379,7 +676,7 @@ async function main() {
   const mode = args.mode;
 
   if (mode === "version") {
-    console.log(`YouTube Monitor v${VERSION}`);
+    console.log(`YouTube Monitor v${VERSION} (with Xray proxy support)`);
     Deno.exit(0);
   }
 
@@ -399,6 +696,12 @@ async function main() {
       break;
     }
 
+    case "test-webhook": {
+      const success = await monitor.testWebhook();
+      Deno.exit(success ? 0 : 1);
+      break;
+    }
+
     case "daemon":
       await monitor.start();
       // Keep running
@@ -407,7 +710,7 @@ async function main() {
 
     default:
       console.error(`Unknown mode: ${mode}`);
-      console.error("Available modes: once, daemon, validate, version");
+      console.error("Available modes: once, daemon, validate, test-webhook, version");
       Deno.exit(1);
   }
 }
