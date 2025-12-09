@@ -28,14 +28,16 @@ export class SubscriptionManager {
       }
 
       const base64Text = await response.text();
-      this.logger.debug("Subscription fetched", {
+      this.logger.info("Subscription fetched", {
         length: base64Text.length,
+        preview: base64Text.substring(0, 100),
       });
 
       // Decode base64
       const decoded = atob(base64Text.trim());
-      this.logger.debug("Subscription decoded", {
+      this.logger.info("Subscription decoded", {
         length: decoded.length,
+        linesCount: decoded.split("\n").length,
       });
 
       // Split по \n и фильтровать пустые строки
@@ -61,7 +63,15 @@ export class SubscriptionManager {
               vlessUrl: trimmed,
             });
 
-            this.logger.debug("Node parsed", { label, protocol: trimmed.split("://")[0] });
+            this.logger.info("Node parsed", {
+              label,
+              protocol: trimmed.split("://")[0],
+              urlPreview: trimmed.substring(0, 50) + "...",
+            });
+          } else {
+            this.logger.warn("Failed to extract label from URL", {
+              urlPreview: trimmed.substring(0, 100),
+            });
           }
         }
       }
@@ -71,6 +81,13 @@ export class SubscriptionManager {
         nodesFound: nodes.length,
         labels: nodes.map(n => n.label),
       });
+
+      if (nodes.length === 0) {
+        this.logger.error("No nodes found in subscription!", {
+          totalLines: lines.length,
+          sampleLines: lines.slice(0, 3).map(l => l.substring(0, 100)),
+        });
+      }
 
       return nodes;
     } catch (error) {
