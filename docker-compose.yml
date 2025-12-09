@@ -11,6 +11,7 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - WEBHOOK_URL=${WEBHOOK_URL}
       - PROXY_LINK=${PROXY_LINK}
+      - SUBSCRIPTION_URL=${SUBSCRIPTION_URL}
       - XRAY_SOCKS_PORT=${XRAY_SOCKS_PORT:-10808}
     
     ports:
