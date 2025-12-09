@@ -53,4 +53,4 @@ HEALTHCHECK --interval=5m --timeout=30s --start-period=10s --retries=3 \
   CMD curl -f http://localhost:9090/health || exit 1
 
 # Запуск
-CMD ["sh", "-c", "deno run --allow-net --allow-read --allow-write=./logs,/etc/xray --allow-env --allow-run=yt-dlp,xray monitor.ts --mode=${MODE}"]
+CMD ["sh", "-c", "deno run --allow-net --allow-read --allow-write=./logs,/etc/xray --allow-env --allow-run=yt-dlp,xray --allow-sys monitor.ts --mode=${MODE}"]

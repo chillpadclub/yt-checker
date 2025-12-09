@@ -1,4 +1,4 @@
-#!/usr/bin/env -S deno run --allow-net --allow-read --allow-write=./logs,/etc/xray --allow-env --allow-run=yt-dlp,xray
+#!/usr/bin/env -S deno run --allow-net --allow-read --allow-write=./logs,/etc/xray --allow-env --allow-run=yt-dlp,xray --allow-sys
 
 import { parse } from "https://deno.land/std@0.208.0/flags/mod.ts";
 import { VideoChecker } from "./src/checker.ts";
@@ -85,37 +85,6 @@ class YouTubeMonitor {
       metricsEnabled: this.config.metrics?.enabled,
     });
 
-    // Инициализируем Xray если указан PROXY_LINK
-    const proxyLink = Deno.env.get("PROXY_LINK");
-    if (proxyLink) {
-      try {
-        this.logger.info("Initializing Xray proxy");
-        this.xrayManager = new XrayManager(proxyLink, this.logger);
-        await this.xrayManager.start();
-        
-        // Настраиваем checker для использования прокси
-        const socksProxy = this.xrayManager.getSocksProxy();
-        this.checker.setSocksProxy(socksProxy);
-        
-        // Тестируем подключение
-        const connected = await this.xrayManager.testConnection();
-        this.state.proxyEnabled = true;
-        this.state.proxyStatus = connected ? "connected" : "disconnected";
-        
-        this.logger.info("Xray proxy initialized", {
-          proxy: socksProxy,
-          status: this.state.proxyStatus,
-        });
-      } catch (error) {
-        this.logger.error("Failed to initialize Xray proxy", {
-          error: error.message,
-        });
-        this.logger.warn("Continuing without proxy...");
-      }
-    } else {
-      this.logger.info("No PROXY_LINK specified, running without proxy");
-    }
-
     // Инициализируем Subscription если указан SUBSCRIPTION_URL
     const subscriptionUrl = Deno.env.get("SUBSCRIPTION_URL");
     if (subscriptionUrl && this.config.subscription?.enabled) {
@@ -146,8 +115,38 @@ class YouTubeMonitor {
         });
         this.logger.warn("Continuing without subscription...");
       }
-    } else if (subscriptionUrl) {
-      this.logger.warn("SUBSCRIPTION_URL set but subscription not enabled in config");
+    } else {
+      // Если нет subscription, используем один PROXY_LINK (старый режим)
+      const proxyLink = Deno.env.get("PROXY_LINK");
+      if (proxyLink) {
+        try {
+          this.logger.info("Initializing Xray proxy");
+          this.xrayManager = new XrayManager(proxyLink, this.logger);
+          await this.xrayManager.start();
+
+          // Настраиваем checker для использования прокси
+          const socksProxy = this.xrayManager.getSocksProxy();
+          this.checker.setSocksProxy(socksProxy);
+
+          // Тестируем подключение
+          const connected = await this.xrayManager.testConnection();
+          this.state.proxyEnabled = true;
+          this.state.proxyStatus = connected ? "connected" : "disconnected";
+
+          this.logger.info("Xray proxy initialized", {
+            proxy: socksProxy,
+            status: this.state.proxyStatus,
+          });
+        } catch (error) {
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          this.logger.error("Failed to initialize Xray proxy", {
+            error: errorMessage,
+          });
+          this.logger.warn("Continuing without proxy...");
+        }
+      } else {
+        this.logger.info("No PROXY_LINK or SUBSCRIPTION_URL specified, running without proxy");
+      }
     }
 
     // Стартуем metrics сервер
