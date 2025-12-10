@@ -3,6 +3,7 @@
 services:
   youtube-monitor:
     build: .
+    image: youtube-monitor:latest
     container_name: youtube-monitor
     restart: unless-stopped
     
