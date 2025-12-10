@@ -106,6 +106,12 @@ export interface SimplifiedWebhookPayload {
   timestamp: string;
   message: string;
   failing_nodes: NodeSummary[];  // Only nodes with failures
+  recovered_nodes?: Array<{
+    node: string;
+    total_videos: number;
+    successful_videos: number;
+    status: string;
+  }>;
   summary: {
     total_nodes_checked: number;
     total_nodes_failed: number;

@@ -112,7 +112,7 @@ export class AlertManager {
     const totalVideosChecked = payload.status.details.length;
     const totalVideosFailed = payload.status.failed_videos;
 
-    return {
+    const simplified: SimplifiedWebhookPayload = {
       event: payload.event,
       severity: payload.severity,
       timestamp: payload.timestamp,
@@ -125,6 +125,13 @@ export class AlertManager {
         total_videos_checked: totalVideosChecked,
       },
     };
+
+    // Add recovered_nodes if present (for recovery events)
+    if (payload.recovered_nodes) {
+      simplified.recovered_nodes = payload.recovered_nodes;
+    }
+
+    return simplified;
   }
 
   private async sendToEndpoint(

@@ -26,10 +26,10 @@ export class SubscriptionManager {
       const response = await fetch(this.subscriptionUrl, {
         signal: AbortSignal.timeout(30000),
         headers: {
-          "User-Agent": "Xray-Checker",
+          "User-Agent": "YouTube-Checker",
           "X-Device-OS": "CheckerOS",
           "X-Ver-OS": version,
-          "X-Device-Model": "Xray-Checker Pro Max",
+          "X-Device-Model": "YouTube-Checker",
           "X-Hwid": hwid,
           "Accept": "*/*",
         },
