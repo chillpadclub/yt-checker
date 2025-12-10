@@ -16,11 +16,7 @@
       "weight": 1
     }
   ],
-  "check_interval_seconds": 300,
-  "timeout_seconds": 30,
-  "alert_threshold": 2,
-  "debounce_minutes": 15,
-  
+
   "webhooks": {
     "enabled": true,
     "endpoints": [
@@ -28,31 +24,21 @@
         "name": "n8n",
         "url": "${WEBHOOK_URL}",
         "enabled": true,
-        "events": ["error", "recovery", "warning"]
+        "events": ["error", "recovery", "warning", "degradation"]
       }
     ]
   },
-  
+
   "metrics": {
     "enabled": true,
     "port": 9090,
     "path": "/metrics"
   },
-  
+
   "logging": {
     "level": "info",
     "max_age_hours": 24,
     "console": true,
     "file": true
-  },
-
-  "proxy": {
-    "type": "system"
-  },
-
-  "subscription": {
-    "enabled": true,
-    "url": "${SUBSCRIPTION_URL}",
-    "refresh_interval_hours": 24
   }
 }

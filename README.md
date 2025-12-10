@@ -1,254 +1,235 @@
-# YouTube Proxy Monitor
+# YouTube Multi-Node Monitor
 
-Мониторинг доступности YouTube через прокси-ноду. Проверяет доступность видео и отправляет алерты при сбоях.
+Мониторинг доступности YouTube через множественные прокси-ноды с Prometheus метриками. Проверяет доступность видео через subscription link (несколько vless нод) и отправляет алерты при сбоях.
 
 ## Возможности
 
-- ✅ Быстрая проверка доступности YouTube (1-2 сек на проверку)
-- 🔔 Алерты через webhook (n8n, Telegram, Discord и др.)
-- 📊 Метрики для Prometheus (готово к подключению)
-- 📝 Структурированное логирование (JSON Lines)
-- 🐳 Готовый Docker контейнер
-- 🔄 Автоматическая ротация логов
-- 💪 Debounce алертов (не спамит)
-- 🎯 Умное определение состояния (healthy/degraded/failed)
+- ✅ **Multi-node мониторинг** - проверка через несколько прокси-нод из subscription
+- 🌐 **Xray proxy** - встроенная поддержка vless/vmess/trojan/shadowsocks
+- 📊 **Prometheus метрики** - готовый формат с лейблами нод
+- 🔔 **Умные алерты** - webhook уведомления с группировкой по нодам
+- 🔐 **Basic Auth** - защита /metrics endpoint
+- 🐳 **Оптимизированный Docker** - 350 MB образ, сборка за 70 секунд
+- 💪 **Debounce алертов** - не спамит повторными уведомлениями
+- 📝 **Структурированное логирование** - JSON Lines формат
 
 ## Быстрый старт
 
-### 1. Создайте структуру проекта
+### 1. Клонируйте репозиторий
 
 ```bash
-mkdir youtube-monitor && cd youtube-monitor
-mkdir src logs
-
-# Скопируйте все файлы из артефактов:
-# - monitor.ts
-# - config.json
-# - Dockerfile
-# - docker-compose.yml
-# - .env.example
-# - src/checker.ts
-# - src/alerting.ts
-# - src/metrics.ts
-# - src/logger.ts
-# - src/types.ts
+git clone <your-repo-url>
+cd youtube-monitor
 ```
 
-### 2. Настройте конфигурацию
+### 2. Настройте переменные окружения
 
 ```bash
-# Скопируйте пример .env
 cp .env.example .env
-
-# Отредактируйте .env
 nano .env
 ```
 
-Укажите ваш `WEBHOOK_URL` для получения алертов.
+Минимальная конфигурация:
 
-### 3. Настройте config.json (опционально)
-
-По умолчанию используются 3 стабильных видео. Можете заменить их на свои:
-
-```json
-{
-  "videos": [
-    {
-      "id": "dQw4w9WgXcQ",
-      "title": "Test Video 1",
-      "weight": 1
-    }
-  ],
-  "check_interval_seconds": 300,
-  "alert_threshold": 2
-}
+```env
+MODE=daemon
+SUBSCRIPTION_URL=https://your-subscription-url.com/path
+WEBHOOK_URL=https://n8n.example.com/webhook/youtube-monitor
+METRICS_USERNAME=admin
+METRICS_PASSWORD=secure_password_here
 ```
 
-### 4. Запуск
-
-#### Docker Compose (рекомендуется)
+### 3. Запустите через Docker Compose
 
 ```bash
-# Сборка и запуск
-docker-compose up -d
-
-# Проверка логов
-docker-compose logs -f
-
-# Остановка
-docker-compose down
+docker compose up -d
+docker compose logs -f
 ```
 
-#### Docker напрямую
+Готово! Монитор запущен и проверяет доступность через все ноды из subscription.
 
-```bash
-# Сборка
-docker build -t youtube-monitor .
+## Конфигурация (.env)
 
-# Запуск в daemon режиме
-docker run -d \
-  --name youtube-monitor \
-  -p 9090:9090 \
-  -v $(pwd)/logs:/app/logs \
-  -v $(pwd)/config.json:/app/config.json:ro \
-  -e WEBHOOK_URL="https://your-webhook.com" \
-  youtube-monitor
+Все runtime параметры настраиваются через переменные окружения в `.env` файле:
 
-# Одноразовая проверка
-docker run --rm \
-  -v $(pwd)/config.json:/app/config.json:ro \
-  -e WEBHOOK_URL="https://your-webhook.com" \
-  youtube-monitor \
-  sh -c "deno run --allow-all monitor.ts --mode=once"
-```
+| Переменная | Описание | По умолчанию | Обязательна |
+|------------|----------|--------------|-------------|
+| **Основные параметры** |
+| `MODE` | Режим работы: `daemon`, `once`, `validate`, `test-webhook` | `daemon` | ✅ |
+| `LOG_LEVEL` | Уровень логирования: `debug`, `info`, `warn`, `error` | `info` | ❌ |
+| **Интервалы и таймауты** |
+| `CHECK_INTERVAL_SECONDS` | Интервал между проверками (секунды) | `300` | ❌ |
+| `TIMEOUT_SECONDS` | Таймаут на одну проверку видео (секунды) | `30` | ❌ |
+| `ALERT_THRESHOLD` | Сколько видео должно упасть для критического алерта | `2` | ❌ |
+| `DEBOUNCE_MINUTES` | Минимальный интервал между повторными алертами (минуты) | `15` | ❌ |
+| `SUBSCRIPTION_REFRESH_HOURS` | Как часто обновлять список нод из subscription (часы) | `24` | ❌ |
+| **Webhook и алерты** |
+| `WEBHOOK_URL` | URL для отправки алертов | - | ✅ |
+| **Метрики** |
+| `METRICS_PORT` | Порт для метрик | `9090` | ❌ |
+| `METRICS_USERNAME` | Basic Auth логин для /metrics | - | ⚠️ |
+| `METRICS_PASSWORD` | Basic Auth пароль для /metrics | - | ⚠️ |
+| **Proxy конфигурация** |
+| `SUBSCRIPTION_URL` | URL с base64 списком vless:// нод | - | ✅ |
+| `PROXY_LINK` | Одиночный vless:// URL (альтернатива subscription) | - | ❌ |
+| `XRAY_SOCKS_PORT` | Порт SOCKS5 прокси | `10808` | ❌ |
 
-#### Без Docker (локально)
-
-```bash
-# Установите зависимости
-# - Deno: curl -fsSL https://deno.land/install.sh | sh
-# - yt-dlp: pip install yt-dlp
-# - ffmpeg: apt install ffmpeg
-
-# Запуск
-deno run --allow-all monitor.ts --mode=daemon
-```
+⚠️ **Рекомендуется** настроить Basic Auth для защиты метрик
 
 ## Режимы работы
 
-### Daemon (основной режим)
-
-Постоянная работа с периодическими проверками:
+### daemon - Постоянный мониторинг
 
 ```bash
-docker run youtube-monitor --mode=daemon
-# или через env
-docker run -e MODE=daemon youtube-monitor
+docker compose up -d
 ```
 
-### Once (одноразовая проверка)
+Периодически проверяет все ноды согласно `CHECK_INTERVAL_SECONDS` из `.env` (по умолчанию 300 секунд = 5 минут).
 
-Для быстрой проверки или тестирования:
+### once - Одноразовая проверка
 
 ```bash
-docker run --rm youtube-monitor --mode=once
+docker run --rm -v ./config.json:/app/config.json:ro \
+  -e SUBSCRIPTION_URL="..." \
+  yt-checker-youtube-monitor \
+  sh -c "deno run --allow-all monitor.ts --mode=once"
 ```
 
-Вывод:
-```
-Running single check...
+Выполняет одну проверку всех нод и завершается.
 
-Results:
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-✅ OK | dQw4w9WgXcQ | 1234ms
-✅ OK | jNQXAC9IVRw | 1456ms
-✅ OK | 9bZkp7q19f0 | 1678ms
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Total: 3 | Failed: 0 | Success: 3
-
-Overall Status: OK
-```
-
-### Validate (проверка конфигурации)
+### validate - Проверка конфигурации
 
 ```bash
-docker run --rm youtube-monitor --mode=validate
+docker compose run --rm youtube-monitor \
+  sh -c "deno run --allow-all monitor.ts --mode=validate"
 ```
 
-Вывод:
-```
-Validating configuration...
+Валидирует `config.json`, проверяет доступность yt-dlp и Xray.
 
-✅ Videos: 3 configured
-✅ Webhooks: 1 endpoint(s) configured
-   - n8n: https://n8n.example.com/webhook/youtube-monitor
-✅ Metrics: enabled on port 9090
-✅ yt-dlp: 2024.12.06
-
-✅ Configuration is valid
-```
-
-## Endpoints
-
-### Health Check
+### test-webhook - Тест вебхуков
 
 ```bash
-curl http://localhost:9090/health
+docker compose run --rm -e MODE=test-webhook youtube-monitor
 ```
 
-Ответ:
-```json
-{
-  "status": "healthy",
-  "timestamp": "2024-12-09T10:30:00Z"
-}
-```
+Отправляет тестовое уведомление на все настроенные webhook endpoints.
 
-### Metrics (JSON)
+## Prometheus метрики
+
+### Формат по умолчанию
 
 ```bash
 curl http://localhost:9090/metrics
+# С Basic Auth:
+curl -u admin:password http://localhost:9090/metrics
 ```
 
-Ответ:
-```json
-{
-  "status": "healthy",
-  "last_check": "2024-12-09T10:30:00Z",
-  "uptime_seconds": 3600,
-  "checks": {
-    "total": 12,
-    "successful": 12,
-    "failed": 0,
-    "success_rate": 1.0
-  },
-  "videos": [
-    {
-      "id": "dQw4w9WgXcQ",
-      "status": "ok",
-      "last_check_duration_ms": 1234,
-      "consecutive_failures": 0
-    }
-  ],
-  "performance": {
-    "avg_response_time_ms": 1450
-  }
-}
-```
+Пример ответа:
 
-### Metrics (Prometheus format)
-
-```bash
-curl http://localhost:9090/metrics?format=prometheus
-```
-
-Ответ:
-```
+```prometheus
 # HELP youtube_monitor_up Whether the monitor is running
 # TYPE youtube_monitor_up gauge
 youtube_monitor_up 1
 
 # HELP youtube_check_success Whether the video check succeeded
 # TYPE youtube_check_success gauge
-youtube_check_success{video_id="dQw4w9WgXcQ"} 1
+youtube_check_success{node="Amsterdam",video_id="dQw4w9WgXcQ"} 1
+youtube_check_success{node="Moscow",video_id="dQw4w9WgXcQ"} 0
+youtube_check_success{node="Frankfurt",video_id="dQw4w9WgXcQ"} 1
 
 # HELP youtube_check_duration_seconds Duration of video check
 # TYPE youtube_check_duration_seconds gauge
-youtube_check_duration_seconds{video_id="dQw4w9WgXcQ"} 1.234
+youtube_check_duration_seconds{node="Amsterdam",video_id="dQw4w9WgXcQ"} 1.234
+youtube_check_duration_seconds{node="Moscow",video_id="dQw4w9WgXcQ"} 5.678
+youtube_check_duration_seconds{node="Frankfurt",video_id="dQw4w9WgXcQ"} 1.456
+
+# HELP youtube_checks_total Total number of checks performed
+# TYPE youtube_checks_total counter
+youtube_checks_total 42
+
+# HELP youtube_check_success_rate Success rate of checks
+# TYPE youtube_check_success_rate gauge
+youtube_check_success_rate 0.8571
 ```
 
-## Webhook Payload
+### JSON формат (опционально)
 
-Формат данных, отправляемых на webhook:
+```bash
+curl http://localhost:9090/metrics/json
+```
+
+### Healthcheck endpoint
+
+```bash
+curl http://localhost:9090/health
+```
+
+Ответ (без авторизации):
+
+```json
+{
+  "status": "healthy",
+  "timestamp": "2025-12-10T12:00:00Z"
+}
+```
+
+## Webhook алерты
+
+### Типы событий
+
+Монитор отправляет 4 типа webhook событий:
+
+| Событие | Severity | Когда отправляется | Условие |
+|---------|----------|-------------------|---------|
+| `error` | `critical` | Критический сбой | ≥ `ALERT_THRESHOLD` видео недоступны |
+| `degradation` | `warning` | Частичная деградация | 1+ видео недоступны, но < `ALERT_THRESHOLD` |
+| `recovery` | `info` | Восстановление | Переход из состояния `failed` в `healthy` |
+| `warning` | `warning` | Некритичные проблемы | Fallback для degradation (если degradation не в events) |
+
+**Важно:** В `config.json` можно настроить какие события отправлять:
+
+```json
+{
+  "webhooks": {
+    "enabled": true,
+    "endpoints": [
+      {
+        "name": "n8n",
+        "url": "${WEBHOOK_URL}",
+        "enabled": true,
+        "events": ["error", "recovery", "warning", "degradation"]
+      }
+    ]
+  }
+}
+```
+
+Если какого-то event нет в массиве `events` - он **не будет отправлен**.
+
+### Debounce и Alert Threshold
+
+- **ALERT_THRESHOLD** (default: 2) - сколько видео должно упасть для критического алерта `error`
+- **DEBOUNCE_MINUTES** (default: 15) - минимальный интервал между повторными алертами одного типа
+
+**Пример:**
+- Упало 1 видео → отправится `degradation` (если в events)
+- Упало 2+ видео → отправится `error` (если в events)
+- Следующий `error` алерт не раньше чем через 15 минут
+
+### Формат payload
+
+#### Event: error
 
 ```json
 {
   "event": "error",
   "severity": "critical",
-  "timestamp": "2024-12-09T10:30:00Z",
+  "timestamp": "2025-12-10T12:00:00.000Z",
+  "message": "YouTube proxy check FAILED: 2/3 videos unavailable",
   "node": {
-    "hostname": "proxy-node-1",
-    "ip": "1.2.3.4"
+    "label": "Moscow",
+    "hostname": "youtube-monitor",
+    "ip": "10.0.0.1"
   },
   "status": {
     "available": false,
@@ -256,200 +237,298 @@ youtube_check_duration_seconds{video_id="dQw4w9WgXcQ"} 1.234
     "total_videos": 3,
     "details": [
       {
+        "node_label": "Moscow",
         "video_id": "dQw4w9WgXcQ",
         "status": "failed",
         "success": false,
-        "duration_ms": 1523,
-        "error": "HTTP 403: Video unavailable",
-        "timestamp": "2024-12-09T10:30:00Z"
+        "duration_ms": 5234,
+        "error": "HTTP 403: Video unavailable (access denied)",
+        "timestamp": "2025-12-10T12:00:00.000Z"
       }
     ]
   },
-  "message": "YouTube proxy check FAILED: 2/3 videos unavailable",
   "metadata": {
     "consecutive_failures": 3,
-    "last_success": "2024-12-09T10:15:00Z"
+    "last_success": "2025-12-10T11:45:00.000Z",
+    "proxy_enabled": true,
+    "proxy_status": "connected"
   }
 }
 ```
 
-### События (events)
-
-- `error` - критическая ошибка (≥2 видео недоступны)
-- `recovery` - восстановление после ошибки
-- `warning` - частичная недоступность (1 видео недоступно)
-
-## Интеграции
-
-### n8n
-
-В n8n создайте Webhook trigger и используйте его URL:
-
-```bash
-WEBHOOK_URL=https://your-n8n.com/webhook/youtube-monitor
-```
-
-### Telegram Bot
-
-Добавьте в `config.json`:
+#### Event: degradation
 
 ```json
 {
-  "webhooks": {
-    "endpoints": [
-      {
-        "name": "telegram",
-        "url": "https://api.telegram.org/bot<YOUR_BOT_TOKEN>/sendMessage",
-        "enabled": true,
-        "events": ["error", "recovery"],
-        "headers": {
-          "Content-Type": "application/json"
-        }
-      }
-    ]
+  "event": "degradation",
+  "severity": "warning",
+  "timestamp": "2025-12-10T12:00:00.000Z",
+  "message": "YouTube proxy DEGRADED: 1/3 videos unavailable",
+  "node": {
+    "label": "Frankfurt",
+    "hostname": "youtube-monitor",
+    "ip": "10.0.0.1"
+  },
+  "status": {
+    "available": true,
+    "failed_videos": 1,
+    "total_videos": 3,
+    "details": [...]
   }
 }
 ```
 
-И модифицируйте payload в `src/alerting.ts` для Telegram формата.
+#### Event: recovery
 
-### Prometheus + Grafana
+```json
+{
+  "event": "recovery",
+  "severity": "info",
+  "timestamp": "2025-12-10T12:05:00.000Z",
+  "message": "YouTube proxy RECOVERED: all videos accessible",
+  "node": {
+    "hostname": "youtube-monitor",
+    "ip": "10.0.0.1"
+  },
+  "status": {
+    "available": true,
+    "failed_videos": 0,
+    "total_videos": 3,
+    "details": [...]
+  },
+  "metadata": {
+    "downtime_duration_ms": 300000,
+    "consecutive_failures": 0
+  }
+}
+```
 
-1. Добавьте job в `prometheus.yml`:
+### Тестирование вебхуков
+
+```bash
+# Отправить тестовый warning webhook
+docker compose run --rm youtube-monitor \
+  sh -c "deno run --allow-all monitor.ts --mode=test-webhook"
+```
+
+Проверьте что webhook пришел в ваш n8n/webhook endpoint.
+
+## Subscription Link
+
+Формат subscription URL: base64-encoded список vless:// URL разделенных `\n`.
+
+**Пример декодированного содержимого:**
+
+```
+vless://uuid@de.server.com:443?type=tcp&security=reality#🇩🇪 Frankfurt
+vless://uuid@nl.server.com:443?type=tcp&security=reality#🇳🇱 Amsterdam
+vless://uuid@ru.server.com:443?type=tcp&security=reality#🇷🇺 Moscow
+```
+
+Лейблы нод извлекаются из фрагмента URL (часть после `#`). Эмодзи автоматически удаляются, остается только текст.
+
+## Интеграция с Prometheus
+
+Добавьте в `prometheus.yml`:
 
 ```yaml
 scrape_configs:
   - job_name: 'youtube-monitor'
+    scrape_interval: 30s
     static_configs:
       - targets: ['youtube-monitor:9090']
+    basic_auth:
+      username: admin
+      password: secure_password_here
 ```
 
-2. Импортируйте dashboard в Grafana
+### Пример PromQL запросов
 
-3. Создайте алерты на основе метрик:
-   - `youtube_check_success == 0`
-   - `youtube_check_success_rate < 0.8`
+```promql
+# Количество упавших нод
+count(youtube_check_success{video_id="dQw4w9WgXcQ"} == 0)
+
+# Success rate по нодам
+avg by (node) (youtube_check_success)
+
+# Средняя задержка проверки
+avg(youtube_check_duration_seconds)
+
+# Топ самых медленных нод
+topk(3, avg by (node) (youtube_check_duration_seconds))
+```
+
+### Grafana Dashboard
+
+Рекомендуемые панели:
+
+1. **Overall Status** - gauge с `youtube_monitor_status`
+2. **Success Rate** - graph с `youtube_check_success_rate`
+3. **Node Health** - table с `youtube_check_success` по нодам
+4. **Response Time** - graph с `youtube_check_duration_seconds`
+5. **Total Checks** - counter с `youtube_checks_total`
+
+## config.json
+
+Конфигурационный файл содержит только **статические параметры** (список видео, webhook endpoints):
+
+```json
+{
+  "videos": [
+    {
+      "id": "dQw4w9WgXcQ",
+      "title": "Rick Astley - Never Gonna Give You Up",
+      "weight": 1
+    },
+    {
+      "id": "jNQXAC9IVRw",
+      "title": "Me at the zoo",
+      "weight": 1
+    },
+    {
+      "id": "9bZkp7q19f0",
+      "title": "PSY - GANGNAM STYLE",
+      "weight": 1
+    }
+  ],
+
+  "webhooks": {
+    "enabled": true,
+    "endpoints": [
+      {
+        "name": "n8n",
+        "url": "${WEBHOOK_URL}",
+        "enabled": true,
+        "events": ["error", "recovery", "warning", "degradation"]
+      }
+    ]
+  },
+
+  "metrics": {
+    "enabled": true,
+    "port": 9090,
+    "path": "/metrics"
+  },
+
+  "logging": {
+    "level": "info",
+    "max_age_hours": 24,
+    "console": true,
+    "file": true
+  }
+}
+```
+
+**Все runtime параметры** (интервалы, таймауты, thresholds) вынесены в `.env` файл для удобной настройки без редактирования JSON.
+
+## Архитектура multi-node проверки
+
+```
+YouTubeMonitor
+├── SubscriptionManager - загружает и парсит base64 список нод
+│   └── Периодическое обновление (раз в SUBSCRIPTION_REFRESH_HOURS часов)
+│
+├── Для каждой ноды ПОСЛЕДОВАТЕЛЬНО:
+│   ├── [1] XrayManager.start(vless_url) → SOCKS5 на :XRAY_SOCKS_PORT
+│   ├── [2] VideoChecker.setSocksProxy("socks5://127.0.0.1:XRAY_SOCKS_PORT")
+│   ├── [3] VideoChecker.setNodeLabel("Moscow")
+│   ├── [4] Проверка всех видео через yt-dlp (timeout: TIMEOUT_SECONDS)
+│   ├── [5] XrayManager.stop()
+│   └── Повторить для следующей ноды
+│
+├── MetricsServer - отдает Prometheus метрики с лейблом node=
+└── AlertManager - группирует ошибки по нодам (threshold: ALERT_THRESHOLD)
+    └── Debounce повторных алертов (DEBOUNCE_MINUTES минут)
+```
 
 ## Логи
 
 ### Основной лог
 
 ```bash
-tail -f logs/youtube-monitor.log
-```
-
-Формат:
-```
-2024-12-09T10:30:00Z [INFO] Check completed {"total":3,"failed":0,"success":3,"duration_ms":1234}
-2024-12-09T10:30:05Z [ERROR] YouTube proxy FAILED {"failed":2,"total":3}
+docker compose logs -f
 ```
 
 ### Структурированные логи проверок
 
 ```bash
-tail -f logs/checks.jsonl
+tail -f logs/checks.jsonl | jq .
 ```
 
 Формат (JSON Lines):
+
 ```json
-{"timestamp":"2024-12-09T10:00:00Z","level":"info","message":"Check completed","data":{"total":3,"failed":0}}
-{"timestamp":"2024-12-09T10:05:00Z","level":"info","message":"Check completed","data":{"total":3,"failed":1}}
+{"timestamp":"2025-12-10T12:00:00Z","level":"info","message":"Check completed","data":{"total":15,"failed":2,"nodes":5}}
 ```
 
-Парсинг с `jq`:
-```bash
-# Последние 10 проверок
-cat logs/checks.jsonl | tail -10 | jq .
+Парсинг:
 
-# Только неудачные проверки
+```bash
+# Только ошибки
 cat logs/checks.jsonl | jq 'select(.data.failed > 0)'
 
 # Статистика за сегодня
-cat logs/checks.jsonl | jq -s 'map(.data.failed) | add'
+cat logs/checks.jsonl | jq -s '[.[] | .data.failed] | add'
 ```
-
-## Настройка
-
-### Основные параметры
-
-| Параметр | Описание | По умолчанию |
-|----------|----------|--------------|
-| `check_interval_seconds` | Интервал проверок | 300 (5 минут) |
-| `timeout_seconds` | Таймаут на проверку | 30 |
-| `alert_threshold` | Сколько видео должно упасть для алерта | 2 |
-| `debounce_minutes` | Минимальный интервал между алертами | 15 |
-
-### Выбор видео
-
-Рекомендуется использовать:
-- Популярные, старые видео (не удалят)
-- Официальные каналы (YouTube, Vevo)
-- Разные типы контента
-
-Примеры стабильных видео:
-- `dQw4w9WgXcQ` - Rick Astley (310M+ views)
-- `jNQXAC9IVRw` - First YouTube video (280M+ views)
-- `9bZkp7q19f0` - PSY Gangnam Style (5B+ views)
 
 ## Устранение неполадок
 
-### yt-dlp не найден
+### Проверка нод из subscription
 
 ```bash
-docker exec youtube-monitor yt-dlp --version
+docker compose exec youtube-monitor sh -c \
+  "curl -s '$SUBSCRIPTION_URL' | base64 -d"
 ```
 
-Если не работает - пересоберите контейнер:
+### Проверка Xray
+
 ```bash
-docker-compose down
-docker-compose build --no-cache
-docker-compose up -d
+docker compose exec youtube-monitor xray version
 ```
 
-### Webhook не отправляется
+### Проверка yt-dlp через прокси
 
-Проверьте логи:
 ```bash
-docker-compose logs | grep "webhook"
+docker compose exec youtube-monitor sh -c \
+  "yt-dlp --proxy socks5://127.0.0.1:10808 --simulate 'https://www.youtube.com/watch?v=dQw4w9WgXcQ'"
 ```
 
-Проверьте URL:
+### Webhook не работает
+
+Проверьте тестовым режимом:
+
 ```bash
-docker exec youtube-monitor env | grep WEBHOOK_URL
+docker compose run --rm -e MODE=test-webhook youtube-monitor
 ```
 
-### Метрики недоступны
+### Метрики требуют авторизацию
 
-Проверьте что порт открыт:
-```bash
-curl http://localhost:9090/health
-```
+Если Basic Auth не настроен, метрики доступны без пароля. Для безопасности установите:
 
-Проверьте конфиг:
-```bash
-docker exec youtube-monitor cat config.json | jq .metrics
-```
-
-### Видео недоступно
-
-Проверьте вручную:
-```bash
-docker exec youtube-monitor yt-dlp --simulate https://www.youtube.com/watch?v=dQw4w9WgXcQ
+```env
+METRICS_USERNAME=admin
+METRICS_PASSWORD=strong_password_here
 ```
 
 ## Production рекомендации
 
-1. **Используйте docker-compose** с restart policy
-2. **Настройте ротацию логов** через logrotate или Docker logging driver
-3. **Мониторьте сам монитор** через healthcheck
-4. **Используйте несколько endpoint'ов** для алертов (дублирование)
-5. **Настройте debounce** чтобы не спамить алертами
-6. **Запускайте на каждой прокси-ноде** отдельный инстанс
+1. ✅ **Используйте `restart: unless-stopped`** в docker-compose.yml
+2. ✅ **Настройте Basic Auth** для /metrics endpoint
+3. ✅ **Мониторьте healthcheck** через `/health` endpoint
+4. ✅ **Используйте несколько webhook endpoints** для дублирования
+5. ✅ **Настройте `DEBOUNCE_MINUTES`** в .env чтобы не спамить
+6. ✅ **Ротация логов** через Docker logging driver:
+
+```yaml
+services:
+  youtube-monitor:
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+```
 
 ## Лицензия
 
 MIT
-
-## Поддержка
-
-Если возникли вопросы или проблемы - создайте Issue.

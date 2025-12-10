@@ -58,14 +58,30 @@ class YouTubeMonitor {
   private currentNodes: NodeInfo[] = [];
   private state: MonitorState;
   private checkInterval?: number;
+  private isCheckInProgress = false;
+
+  // Runtime parameters from env
+  private checkIntervalSeconds: number;
+  private timeoutSeconds: number;
+  private alertThreshold: number;
+  private debounceMinutes: number;
+  private subscriptionRefreshHours: number;
 
   constructor(config: Config) {
     this.config = config;
     this.logger = new Logger(config.logging);
-    this.checker = new VideoChecker(config, this.logger);
+
+    // Read runtime parameters from env with defaults
+    this.checkIntervalSeconds = parseInt(Deno.env.get("CHECK_INTERVAL_SECONDS") || "300");
+    this.timeoutSeconds = parseInt(Deno.env.get("TIMEOUT_SECONDS") || "30");
+    this.alertThreshold = parseInt(Deno.env.get("ALERT_THRESHOLD") || "2");
+    this.debounceMinutes = parseInt(Deno.env.get("DEBOUNCE_MINUTES") || "15");
+    this.subscriptionRefreshHours = parseInt(Deno.env.get("SUBSCRIPTION_REFRESH_HOURS") || "24");
+
+    this.checker = new VideoChecker(config, this.logger, this.timeoutSeconds);
     this.alertManager = new AlertManager(config, this.logger);
     this.state = new MonitorState();
-    
+
     if (config.metrics?.enabled) {
       this.metricsServer = new MetricsServer(
         config.metrics.port,
@@ -79,7 +95,7 @@ class YouTubeMonitor {
   async start() {
     this.logger.info("YouTube Monitor started", {
       version: VERSION,
-      checkInterval: this.config.check_interval_seconds,
+      checkInterval: this.checkIntervalSeconds,
       videos: this.config.videos.length,
       webhooksEnabled: this.config.webhooks?.enabled,
       metricsEnabled: this.config.metrics?.enabled,
@@ -87,12 +103,12 @@ class YouTubeMonitor {
 
     // Инициализируем Subscription если указан SUBSCRIPTION_URL
     const subscriptionUrl = Deno.env.get("SUBSCRIPTION_URL");
-    if (subscriptionUrl && this.config.subscription?.enabled) {
+    if (subscriptionUrl) {
       try {
         this.logger.info("Initializing subscription manager");
         this.subscriptionManager = new SubscriptionManager(
           subscriptionUrl,
-          this.config.subscription.refresh_interval_hours,
+          this.subscriptionRefreshHours,
           this.logger
         );
 
@@ -160,7 +176,7 @@ class YouTubeMonitor {
     // Запускаем периодические проверки
     this.checkInterval = setInterval(
       () => this.runCheck(),
-      this.config.check_interval_seconds * 1000
+      this.checkIntervalSeconds * 1000
     );
 
     // Graceful shutdown
@@ -186,6 +202,13 @@ class YouTubeMonitor {
   }
 
   async runCheck() {
+    // Предотвращаем параллельные проверки
+    if (this.isCheckInProgress) {
+      this.logger.warn("Check already in progress, skipping this cycle");
+      return;
+    }
+
+    this.isCheckInProgress = true;
     this.logger.debug("Running check cycle");
     this.state.totalChecks++;
 
@@ -245,6 +268,12 @@ class YouTubeMonitor {
         }
       } else {
         // Старый режим: один PROXY_LINK или без прокси
+        // Обновляем proxyEnabled из состояния xrayManager
+        if (this.xrayManager) {
+          this.state.proxyEnabled = true;
+          this.state.proxyStatus = "connected";
+        }
+
         const results = await this.checker.checkAllVideos();
         allResults.push(...results);
       }
@@ -259,12 +288,12 @@ class YouTubeMonitor {
         total: totalCount,
         failed: failedCount,
         success: totalCount - failedCount,
-        nodes: this.currentNodes.length || 1,
+        nodes: this.currentNodes.length > 0 ? this.currentNodes.length : (this.state.proxyEnabled ? 1 : 0),
         proxy: this.state.proxyEnabled ? "enabled" : "disabled",
       });
 
       // Обновляем состояние
-      if (failedCount >= this.config.alert_threshold) {
+      if (failedCount >= this.alertThreshold) {
         await this.handleFailure(allResults, failedCount, totalCount);
       } else if (failedCount > 0) {
         await this.handleDegradation(allResults, failedCount, totalCount);
@@ -276,6 +305,8 @@ class YouTubeMonitor {
       const errorMessage = error instanceof Error ? error.message : String(error);
       this.logger.error("Check cycle failed", { error: errorMessage });
       this.state.totalFailures++;
+    } finally {
+      this.isCheckInProgress = false;
     }
   }
 
@@ -297,28 +328,33 @@ class YouTubeMonitor {
         proxyEnabled: this.state.proxyEnabled,
       });
 
-      await this.alertManager.sendAlert({
-        event: "error",
-        severity: "critical",
-        timestamp: new Date().toISOString(),
-        node: {
-          hostname: Deno.hostname(),
-          ip: await this.getLocalIP(),
-        },
-        status: {
-          available: false,
-          failed_videos: failedCount,
-          total_videos: totalCount,
-          details: results,
-        },
-        message: `YouTube ${this.state.proxyEnabled ? 'proxy' : 'direct'} check FAILED: ${failedCount}/${totalCount} videos unavailable`,
-        metadata: {
-          consecutive_failures: this.state.consecutiveFailures,
-          last_success: this.getLastSuccessTime(),
-          proxy_enabled: this.state.proxyEnabled,
-          proxy_status: this.state.proxyStatus,
-        },
-      });
+      // Проверяем есть ли error в events
+      const hasErrorEvent = this.config.webhooks?.endpoints?.some(e => e.events.includes("error"));
+
+      if (hasErrorEvent) {
+        await this.alertManager.sendAlert({
+          event: "error",
+          severity: "critical",
+          timestamp: new Date().toISOString(),
+          node: {
+            hostname: Deno.hostname(),
+            ip: await this.getLocalIP(),
+          },
+          status: {
+            available: false,
+            failed_videos: failedCount,
+            total_videos: totalCount,
+            details: results,
+          },
+          message: `YouTube ${this.state.proxyEnabled ? 'proxy' : 'direct'} check FAILED: ${failedCount}/${totalCount} videos unavailable`,
+          metadata: {
+            consecutive_failures: this.state.consecutiveFailures,
+            last_success: this.getLastSuccessTime(),
+            proxy_enabled: this.state.proxyEnabled,
+            proxy_status: this.state.proxyStatus,
+          },
+        });
+      }
 
       this.state.lastAlertSent = Date.now();
     }
@@ -335,9 +371,13 @@ class YouTubeMonitor {
         proxyEnabled: this.state.proxyEnabled,
       });
 
-      if (this.config.webhooks?.endpoints?.some(e => e.events.includes("warning"))) {
+      // Проверяем есть ли degradation в events (если нет - используем warning как fallback)
+      const hasDegradationEvent = this.config.webhooks?.endpoints?.some(e => e.events.includes("degradation"));
+      const hasWarningEvent = this.config.webhooks?.endpoints?.some(e => e.events.includes("warning"));
+
+      if (hasDegradationEvent || hasWarningEvent) {
         await this.alertManager.sendAlert({
-          event: "warning",
+          event: hasDegradationEvent ? "degradation" : "warning",
           severity: "warning",
           timestamp: new Date().toISOString(),
           node: {
@@ -371,35 +411,40 @@ class YouTubeMonitor {
     if (previousState === "failed") {
       this.logger.info("YouTube proxy RECOVERED");
 
-      await this.alertManager.sendAlert({
-        event: "recovery",
-        severity: "info",
-        timestamp: new Date().toISOString(),
-        node: {
-          hostname: Deno.hostname(),
-          ip: await this.getLocalIP(),
-        },
-        status: {
-          available: true,
-          failed_videos: 0,
-          total_videos: results.length,
-          details: results,
-        },
-        message: `YouTube ${this.state.proxyEnabled ? 'proxy' : 'direct'} RECOVERED - all checks passing`,
-        metadata: {
-          consecutive_failures: 0,
-          last_success: new Date().toISOString(),
-          proxy_enabled: this.state.proxyEnabled,
-          proxy_status: this.state.proxyStatus,
-        },
-      });
+      // Проверяем есть ли recovery в events
+      const hasRecoveryEvent = this.config.webhooks?.endpoints?.some(e => e.events.includes("recovery"));
+
+      if (hasRecoveryEvent) {
+        await this.alertManager.sendAlert({
+          event: "recovery",
+          severity: "info",
+          timestamp: new Date().toISOString(),
+          node: {
+            hostname: Deno.hostname(),
+            ip: await this.getLocalIP(),
+          },
+          status: {
+            available: true,
+            failed_videos: 0,
+            total_videos: results.length,
+            details: results,
+          },
+          message: `YouTube ${this.state.proxyEnabled ? 'proxy' : 'direct'} RECOVERED - all checks passing`,
+          metadata: {
+            consecutive_failures: 0,
+            last_success: new Date().toISOString(),
+            proxy_enabled: this.state.proxyEnabled,
+            proxy_status: this.state.proxyStatus,
+          },
+        });
+      }
     }
   }
 
   private shouldSendAlert(): boolean {
     if (!this.state.lastAlertSent) return true;
-    
-    const debounceMs = this.config.debounce_minutes * 60 * 1000;
+
+    const debounceMs = this.debounceMinutes * 60 * 1000;
     return (Date.now() - this.state.lastAlertSent) > debounceMs;
   }
 
@@ -463,8 +508,8 @@ class YouTubeMonitor {
     
     console.log("━".repeat(60));
     console.log(`Total: ${totalCount} | Failed: ${failedCount} | Success: ${totalCount - failedCount}`);
-    
-    const overallStatus = failedCount >= this.config.alert_threshold ? "FAILED" : "OK";
+
+    const overallStatus = failedCount >= this.alertThreshold ? "FAILED" : "OK";
     console.log(`\nOverall Status: ${overallStatus}`);
     
     if (proxyLink) {
@@ -475,8 +520,8 @@ class YouTubeMonitor {
     if (this.xrayManager) {
       await this.xrayManager.stop();
     }
-    
-    return failedCount < this.config.alert_threshold;
+
+    return failedCount < this.alertThreshold;
   }
 
   async testWebhook(): Promise<boolean> {

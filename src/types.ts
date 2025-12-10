@@ -9,7 +9,7 @@ export interface WebhookEndpoint {
   name: string;
   url: string;
   enabled: boolean;
-  events: Array<"error" | "recovery" | "warning">;
+  events: Array<"error" | "recovery" | "warning" | "degradation">;
   headers?: Record<string, string>;
 }
 
@@ -44,17 +44,9 @@ export interface SubscriptionConfig {
 
 export interface Config {
   videos: VideoConfig[];
-  check_interval_seconds: number;
-  full_check_interval_seconds?: number;
-  timeout_seconds: number;
-  alert_threshold: number;
-  speed_threshold_kbps?: number;
-  debounce_minutes: number;
   webhooks?: WebhooksConfig;
   metrics?: MetricsConfig;
   logging: LoggingConfig;
-  proxy?: ProxyConfig;
-  subscription?: SubscriptionConfig;
 }
 
 // Check result types

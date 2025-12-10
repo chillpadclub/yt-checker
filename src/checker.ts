@@ -4,11 +4,16 @@ import type { Logger } from "./logger.ts";
 export class VideoChecker {
   private socksProxy?: string;
   private nodeLabel?: string;
+  private timeoutSeconds: number;
 
   constructor(
     private config: Config,
     private logger: Logger,
-  ) {}
+    timeoutSeconds?: number,
+  ) {
+    // Read timeout from env or use provided value
+    this.timeoutSeconds = timeoutSeconds || parseInt(Deno.env.get("TIMEOUT_SECONDS") || "30");
+  }
 
   setSocksProxy(proxy: string) {
     this.socksProxy = proxy;
@@ -48,19 +53,22 @@ export class VideoChecker {
 
       args.push(`https://www.youtube.com/watch?v=${videoId}`);
 
+      // Create AbortController for timeout
+      const abortController = new AbortController();
+      const timeoutId = setTimeout(() => {
+        this.logger.warn(`Check timeout for video: ${videoId}`);
+        abortController.abort();
+      }, this.timeoutSeconds * 1000);
+
       const command = new Deno.Command("yt-dlp", {
         args,
         stdout: "piped",
         stderr: "piped",
+        signal: abortController.signal,
       });
 
-      // Timeout
-      const timeout = setTimeout(() => {
-        this.logger.warn(`Check timeout for video: ${videoId}`);
-      }, this.config.timeout_seconds * 1000);
-
       const { code, stdout, stderr } = await command.output();
-      clearTimeout(timeout);
+      clearTimeout(timeoutId);
 
       const duration_ms = Date.now() - startTime;
 
@@ -105,9 +113,13 @@ export class VideoChecker {
       const duration_ms = Date.now() - startTime;
       const errorMessage = error instanceof Error ? error.message : String(error);
 
+      // Check if it was aborted by timeout
+      const isTimeout = errorMessage.includes("aborted") || errorMessage.includes("AbortError");
+
       this.logger.error(`Video check exception: ${videoId}`, {
         error: errorMessage,
         duration_ms,
+        isTimeout,
       });
 
       return {
@@ -116,7 +128,7 @@ export class VideoChecker {
         status: "failed",
         success: false,
         duration_ms,
-        error: errorMessage,
+        error: isTimeout ? `Check timeout (>${this.timeoutSeconds}s)` : errorMessage,
         timestamp: new Date().toISOString(),
       };
     }
