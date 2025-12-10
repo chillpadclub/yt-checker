@@ -5,29 +5,25 @@ LABEL maintainer="youtube-monitor"
 LABEL description="YouTube availability monitor with Xray proxy support"
 LABEL version="2.0.0"
 
-# Установка системных зависимостей
-RUN apt-get update && apt-get install -y \
+# Установка системных зависимостей + Deno + Xray в одном слое
+RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     curl \
-    ca-certificates \
-    wget \
     unzip \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    # Установка yt-dlp
+    && pip install --no-cache-dir yt-dlp \
+    # Установка Deno
+    && curl -fsSL https://deno.land/install.sh | sh \
+    # Установка Xray-core
+    && XRAY_VERSION=$(curl -s https://api.github.com/repos/XTLS/Xray-core/releases/latest | grep tag_name | cut -d '"' -f 4) \
+    && curl -fsSL -o /tmp/xray.zip "https://github.com/XTLS/Xray-core/releases/download/${XRAY_VERSION}/Xray-linux-64.zip" \
+    && unzip -q /tmp/xray.zip -d /usr/local/bin/ \
+    && chmod +x /usr/local/bin/xray \
+    && rm /tmp/xray.zip
 
-# Установка yt-dlp
-RUN pip install --no-cache-dir yt-dlp
-
-# Установка Deno
-RUN curl -fsSL https://deno.land/install.sh | sh
 ENV DENO_INSTALL="/root/.deno"
 ENV PATH="${DENO_INSTALL}/bin:${PATH}"
-
-# Установка Xray-core
-RUN XRAY_VERSION=$(curl -s https://api.github.com/repos/XTLS/Xray-core/releases/latest | grep tag_name | cut -d '"' -f 4) && \
-    wget -O /tmp/xray.zip "https://github.com/XTLS/Xray-core/releases/download/${XRAY_VERSION}/Xray-linux-64.zip" && \
-    unzip /tmp/xray.zip -d /usr/local/bin/ && \
-    chmod +x /usr/local/bin/xray && \
-    rm /tmp/xray.zip
 
 # Рабочая директория
 WORKDIR /app
