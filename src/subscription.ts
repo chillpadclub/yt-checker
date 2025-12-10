@@ -18,9 +18,21 @@ export class SubscriptionManager {
     try {
       this.logger.info("Fetching subscription", { url: this.subscriptionUrl });
 
-      // Fetch subscription URL
+      // Get HWID from env or generate default
+      const hwid = Deno.env.get("HWID") || "youtube-monitor-default-hwid";
+      const version = "2.0.0";
+
+      // Fetch subscription URL with custom headers
       const response = await fetch(this.subscriptionUrl, {
         signal: AbortSignal.timeout(30000),
+        headers: {
+          "User-Agent": "Xray-Checker",
+          "X-Device-OS": "CheckerOS",
+          "X-Ver-OS": version,
+          "X-Device-Model": "Xray-Checker Pro Max",
+          "X-Hwid": hwid,
+          "Accept": "*/*",
+        },
       });
 
       if (!response.ok) {
