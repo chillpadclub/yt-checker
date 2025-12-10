@@ -5,9 +5,8 @@ LABEL maintainer="youtube-monitor"
 LABEL description="YouTube availability monitor with Xray proxy support"
 LABEL version="2.0.0"
 
-# Установка системных зависимостей + Deno + Xray в одном слое
+# Установка зависимостей (без ffmpeg - экономим ~250 MB!)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ffmpeg \
     curl \
     unzip \
     && rm -rf /var/lib/apt/lists/* \
@@ -20,7 +19,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && curl -fsSL -o /tmp/xray.zip "https://github.com/XTLS/Xray-core/releases/download/${XRAY_VERSION}/Xray-linux-64.zip" \
     && unzip -q /tmp/xray.zip -d /usr/local/bin/ \
     && chmod +x /usr/local/bin/xray \
-    && rm /tmp/xray.zip
+    && rm /tmp/xray.zip \
+    # Удаляем unzip (curl оставляем для healthcheck)
+    && apt-get purge -y --auto-remove unzip
 
 ENV DENO_INSTALL="/root/.deno"
 ENV PATH="${DENO_INSTALL}/bin:${PATH}"
