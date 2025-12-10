@@ -85,6 +85,12 @@ export interface AlertPayload {
     details: CheckResult[];
   };
   message: string;
+  recovered_nodes?: Array<{
+    node: string;
+    total_videos: number;
+    successful_videos: number;
+    status: string;
+  }>;
   metadata: {
     consecutive_failures: number;
     last_success: string | null;

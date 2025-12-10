@@ -415,6 +415,25 @@ class YouTubeMonitor {
       const hasRecoveryEvent = this.config.webhooks?.endpoints?.some(e => e.events.includes("recovery"));
 
       if (hasRecoveryEvent) {
+        // Группируем результаты по нодам для отображения в алерте
+        const nodesInfo = new Map<string, { total: number; success: number }>();
+        for (const result of results) {
+          const nodeLabel = result.node_label || "direct";
+          if (!nodesInfo.has(nodeLabel)) {
+            nodesInfo.set(nodeLabel, { total: 0, success: 0 });
+          }
+          const info = nodesInfo.get(nodeLabel)!;
+          info.total++;
+          if (result.success) info.success++;
+        }
+
+        const recoveredNodes = Array.from(nodesInfo.entries()).map(([label, info]) => ({
+          node: label,
+          total_videos: info.total,
+          successful_videos: info.success,
+          status: "recovered"
+        }));
+
         await this.alertManager.sendAlert({
           event: "recovery",
           severity: "info",
@@ -429,7 +448,8 @@ class YouTubeMonitor {
             total_videos: results.length,
             details: results,
           },
-          message: `YouTube ${this.state.proxyEnabled ? 'proxy' : 'direct'} RECOVERED - all checks passing`,
+          message: `YouTube ${this.state.proxyEnabled ? 'proxy' : 'direct'} RECOVERED - all ${recoveredNodes.length} node(s) passing`,
+          recovered_nodes: recoveredNodes,
           metadata: {
             consecutive_failures: 0,
             last_success: new Date().toISOString(),

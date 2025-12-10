@@ -285,7 +285,7 @@ curl http://localhost:9090/health
   "event": "recovery",
   "severity": "info",
   "timestamp": "2025-12-10T12:05:00.000Z",
-  "message": "YouTube proxy RECOVERED: all videos accessible",
+  "message": "YouTube proxy RECOVERED - all 3 node(s) passing",
   "node": {
     "hostname": "youtube-monitor",
     "ip": "10.0.0.1"
@@ -293,12 +293,34 @@ curl http://localhost:9090/health
   "status": {
     "available": true,
     "failed_videos": 0,
-    "total_videos": 3,
+    "total_videos": 9,
     "details": [...]
   },
+  "recovered_nodes": [
+    {
+      "node": "Moscow",
+      "total_videos": 3,
+      "successful_videos": 3,
+      "status": "recovered"
+    },
+    {
+      "node": "Frankfurt",
+      "total_videos": 3,
+      "successful_videos": 3,
+      "status": "recovered"
+    },
+    {
+      "node": "Amsterdam",
+      "total_videos": 3,
+      "successful_videos": 3,
+      "status": "recovered"
+    }
+  ],
   "metadata": {
-    "downtime_duration_ms": 300000,
-    "consecutive_failures": 0
+    "consecutive_failures": 0,
+    "last_success": "2025-12-10T12:05:00.000Z",
+    "proxy_enabled": true,
+    "proxy_status": "connected"
   }
 }
 ```
